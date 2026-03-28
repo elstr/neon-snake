@@ -1,0 +1,5 @@
+{
+  "name": "Remix: Multiplayer Neon Snake",
+  "description": "Collect orbs to dominate the neon grid in this real-time multiplayer snake game. \nA bigger snake can eat a smaller snake. If that happens the smaller snake looses width and the bigger snake gets more fat.\nBigger snakes move slower than small snakes. \nAdd a Type name screen before starting. \nAdd the ability to create rooms so I can share the room link and play with my friends ",
+  "requestFramePermissions": []
+}
