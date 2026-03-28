@@ -6,11 +6,11 @@
 import { useEffect, useRef, useState, useMemo } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import { useGameStore, globalGameState } from '../store/gameStore';
-import { WORLD_SIZE, TURN_SPEED, BOOST_SPEED, BASE_SPEED, MIN_BOOST_LENGTH, INITIAL_LENGTH } from '../shared/types';
+import { WORLD_SIZE, TURN_SPEED, BOOST_SPEED, BASE_SPEED, MIN_BOOST_LENGTH, INITIAL_LENGTH, PowerUpType, BLACK_HOLE_RADIUS, PowerUp } from '../shared/types';
 import * as THREE from 'three';
-import { Sphere, Grid } from '@react-three/drei';
+import { Sphere, Grid, Torus, Ring } from '@react-three/drei';
 
-const localCollectedOrbs = new Set<string>();
+const localCollectedOrbs = new Map<string, { x: number, y: number, color: string, time: number }>();
 
 function Snake({ playerId, color, isLocal }: { playerId: string, color: string, isLocal: boolean }) {
   const bodyRef = useRef<THREE.InstancedMesh>(null);
@@ -34,8 +34,10 @@ function Snake({ playerId, color, isLocal }: { playerId: string, color: string, 
     const count = player.segments.length;
     bodyRef.current.count = Math.max(0, count - 1);
     
-    // Scale based on score
-    const scale = 1 + (player.score - INITIAL_LENGTH) * 0.02;
+    // Scale based on score and power-ups
+    let scale = 1 + (player.score - INITIAL_LENGTH) * 0.02;
+    if (player.isShrunk) scale *= 0.5;
+    
     headRef.current.scale.setScalar(scale);
     
     while (currentPositions.current.length < count) {
@@ -78,6 +80,12 @@ function Snake({ playerId, color, isLocal }: { playerId: string, color: string, 
       }
     }
     bodyRef.current.instanceMatrix.needsUpdate = true;
+    
+    // Visual effect for invincibility
+    if (player.isInvincible) {
+      const pulse = 1.5 + Math.sin(Date.now() * 0.01) * 0.5;
+      headRef.current.scale.multiplyScalar(pulse);
+    }
   });
 
   return (
@@ -120,6 +128,312 @@ function Snake({ playerId, color, isLocal }: { playerId: string, color: string, 
         />
       </instancedMesh>
     </group>
+  );
+}
+
+function PowerUpItem({ pu }: { pu: PowerUp }) {
+  const meshRef = useRef<THREE.Group>(null);
+  
+  useFrame((state) => {
+    if (!meshRef.current) return;
+    meshRef.current.position.set(pu.x, pu.y, 0.5 + Math.sin(state.clock.elapsedTime * 5) * 0.2);
+    meshRef.current.rotation.y += 0.02;
+    meshRef.current.rotation.x += 0.01;
+    
+    let s = 2.25;
+    if (pu.type === PowerUpType.SPEED) s = 1.8;
+    if (pu.type === PowerUpType.INVINCIBILITY) s = 2.7;
+    meshRef.current.scale.setScalar(s * (1 + Math.sin(state.clock.elapsedTime * 10) * 0.1));
+  });
+
+  const renderGeometry = () => {
+    switch (pu.type) {
+      case PowerUpType.MISSILES:
+        return (
+          <group rotation={[Math.PI / 2, 0, 0]}>
+            <mesh position={[0, -0.2, 0]}>
+              <cylinderGeometry args={[0.2, 0.2, 0.6, 8]} />
+              <meshStandardMaterial color={pu.color} emissive={pu.color} emissiveIntensity={2} />
+            </mesh>
+            <mesh position={[0, 0.3, 0]}>
+              <coneGeometry args={[0.2, 0.4, 8]} />
+              <meshStandardMaterial color="red" emissive="red" emissiveIntensity={2} />
+            </mesh>
+            {/* Fins */}
+            <mesh position={[0, -0.4, 0]} rotation={[0, 0, 0]}>
+              <boxGeometry args={[0.6, 0.1, 0.05]} />
+              <meshStandardMaterial color={pu.color} />
+            </mesh>
+            <mesh position={[0, -0.4, 0]} rotation={[0, Math.PI / 2, 0]}>
+              <boxGeometry args={[0.6, 0.1, 0.05]} />
+              <meshStandardMaterial color={pu.color} />
+            </mesh>
+          </group>
+        );
+      case PowerUpType.SPEED:
+        return (
+          <group scale={[0.5, 1, 0.5]}>
+            <mesh position={[0, 0.3, 0]} rotation={[0, 0, Math.PI / 6]}>
+              <boxGeometry args={[0.2, 0.8, 0.2]} />
+              <meshStandardMaterial color={pu.color} emissive={pu.color} emissiveIntensity={4} />
+            </mesh>
+            <mesh position={[0.15, -0.1, 0]} rotation={[0, 0, -Math.PI / 4]}>
+              <boxGeometry args={[0.2, 0.8, 0.2]} />
+              <meshStandardMaterial color={pu.color} emissive={pu.color} emissiveIntensity={4} />
+            </mesh>
+            <mesh position={[0.3, -0.5, 0]} rotation={[0, 0, Math.PI / 6]}>
+              <boxGeometry args={[0.2, 0.8, 0.2]} />
+              <meshStandardMaterial color={pu.color} emissive={pu.color} emissiveIntensity={4} />
+            </mesh>
+          </group>
+        );
+      case PowerUpType.PORTAL:
+        return (
+          <mesh>
+            <sphereGeometry args={[0.6, 32, 32]} />
+            <meshPhysicalMaterial 
+              color={pu.color} 
+              emissive={pu.color} 
+              emissiveIntensity={0.5}
+              transmission={0.9}
+              thickness={0.5}
+              roughness={0.1}
+              metalness={0.1}
+              transparent
+              opacity={0.6}
+            />
+          </mesh>
+        );
+      case PowerUpType.INVINCIBILITY:
+        return (
+          <mesh>
+             <torusKnotGeometry args={[0.4, 0.1, 64, 8]} />
+             <meshStandardMaterial color={pu.color} emissive={pu.color} emissiveIntensity={4} />
+          </mesh>
+        );
+      case PowerUpType.SHRINK_OPPONENTS:
+        return (
+          <mesh>
+            <boxGeometry args={[0.6, 0.6, 0.6]} />
+            <meshStandardMaterial color={pu.color} emissive={pu.color} emissiveIntensity={4} />
+          </mesh>
+        );
+      case PowerUpType.BLACK_HOLE:
+        return (
+          <group>
+            <mesh>
+              <sphereGeometry args={[0.5, 16, 16]} />
+              <meshStandardMaterial color="black" emissive="black" />
+            </mesh>
+            <mesh rotation={[Math.PI / 2, 0, 0]}>
+              <torusGeometry args={[0.7, 0.05, 8, 32]} />
+              <meshStandardMaterial color={pu.color} emissive={pu.color} emissiveIntensity={4} />
+            </mesh>
+          </group>
+        );
+      default:
+        return (
+          <mesh>
+            <octahedronGeometry args={[0.6, 0]} />
+            <meshStandardMaterial color={pu.color} emissive={pu.color} emissiveIntensity={4} />
+          </mesh>
+        );
+    }
+  };
+
+  return (
+    <group ref={meshRef}>
+      {renderGeometry()}
+    </group>
+  );
+}
+
+function PowerUps() {
+  const [powerUpIds, setPowerUpIds] = useState<string[]>([]);
+
+  useFrame(() => {
+    const gs = globalGameState.current;
+    if (!gs) return;
+    const ids = Object.keys(gs.powerUps);
+    if (JSON.stringify(ids) !== JSON.stringify(powerUpIds)) {
+      setPowerUpIds(ids);
+    }
+  });
+
+  const gs = globalGameState.current;
+  if (!gs) return null;
+
+  return (
+    <group>
+      {powerUpIds.map(id => {
+        const pu = gs.powerUps[id];
+        if (!pu) return null;
+        return <PowerUpItem key={id} pu={pu} />;
+      })}
+    </group>
+  );
+}
+
+function Missiles() {
+  const meshRef = useRef<THREE.InstancedMesh>(null);
+  const dummy = useMemo(() => new THREE.Object3D(), []);
+
+  useFrame(() => {
+    if (!meshRef.current) return;
+    const gs = globalGameState.current;
+    if (!gs) return;
+
+    let i = 0;
+    for (const id in gs.missiles) {
+      const m = gs.missiles[id];
+      dummy.position.set(m.x, m.y, 0.5);
+      dummy.rotation.z = m.angle;
+      dummy.scale.set(3, 1, 1); // Bigger missiles
+      dummy.updateMatrix();
+      meshRef.current.setMatrixAt(i, dummy.matrix);
+      i++;
+    }
+    meshRef.current.count = i;
+    meshRef.current.instanceMatrix.needsUpdate = true;
+  });
+
+  return (
+    <instancedMesh ref={meshRef} args={[null as any, null as any, 100]} frustumCulled={false}>
+      <coneGeometry args={[0.5, 2, 8]} />
+      <meshStandardMaterial color="#ff4400" emissive="#ff4400" emissiveIntensity={5} toneMapped={false} />
+    </instancedMesh>
+  );
+}
+
+function Portals() {
+  const gs = useGameStore(s => s.gameState);
+  const portalRef = useRef<THREE.Group>(null);
+  
+  useFrame(() => {
+    if (portalRef.current) {
+      portalRef.current.rotation.z += 0.01;
+    }
+  });
+
+  if (!gs) return null;
+
+  return (
+    <group ref={portalRef}>
+      {Object.values(gs.portals).map(p => (
+        <group key={p.id}>
+          <Torus position={[p.x1, p.y1, 0.1]} args={[1.5, 0.2, 16, 32]}>
+            <meshStandardMaterial color="#00ffff" emissive="#00ffff" emissiveIntensity={3} toneMapped={false} />
+          </Torus>
+          <Ring position={[p.x1, p.y1, 0.05]} args={[0, 1.4, 32]}>
+            <meshStandardMaterial color="#00ffff" transparent opacity={0.3} />
+          </Ring>
+          
+          <Torus position={[p.x2, p.y2, 0.1]} args={[1.5, 0.2, 16, 32]}>
+            <meshStandardMaterial color="#00ffff" emissive="#00ffff" emissiveIntensity={3} toneMapped={false} />
+          </Torus>
+          <Ring position={[p.x2, p.y2, 0.05]} args={[0, 1.4, 32]}>
+            <meshStandardMaterial color="#00ffff" transparent opacity={0.3} />
+          </Ring>
+        </group>
+      ))}
+    </group>
+  );
+}
+
+function BlackHoles() {
+  const gs = useGameStore(s => s.gameState);
+  if (!gs) return null;
+
+  return (
+    <>
+      {Object.values(gs.blackHoles).map(bh => (
+        <group key={bh.id} position={[bh.x, bh.y, 0.1]}>
+          <Sphere args={[bh.radius, 32, 32]}>
+            <meshStandardMaterial color="#000000" roughness={1} metalness={0} />
+          </Sphere>
+          {/* Neon Ring */}
+          <Torus args={[bh.radius + 0.5, 0.2, 16, 64]}>
+            <meshStandardMaterial 
+              color="#ff00ff" 
+              emissive="#ff00ff" 
+              emissiveIntensity={10} 
+              toneMapped={false} 
+            />
+          </Torus>
+          {/* Outer Glow Ring */}
+          <Ring args={[bh.radius, bh.radius + 2, 64]}>
+            <meshStandardMaterial 
+              color="#ff00ff" 
+              emissive="#ff00ff" 
+              emissiveIntensity={2} 
+              transparent 
+              opacity={0.3} 
+              side={THREE.DoubleSide} 
+            />
+          </Ring>
+        </group>
+      ))}
+    </>
+  );
+}
+
+function CollectedOrbs({ headPos }: { headPos: { x: number, y: number } | null }) {
+  const meshRef = useRef<THREE.InstancedMesh>(null);
+  const dummy = useMemo(() => new THREE.Object3D(), []);
+  const colorObj = useMemo(() => new THREE.Color(), []);
+
+  useFrame(() => {
+    if (!meshRef.current || !headPos) return;
+    const now = Date.now();
+    const duration = 400; // ms
+
+    let i = 0;
+    localCollectedOrbs.forEach((data, id) => {
+      const elapsed = now - data.time;
+      if (elapsed > duration) return;
+
+      const t = elapsed / duration;
+      // Ease out quad
+      const ease = 1 - Math.pow(1 - t, 2);
+      
+      dummy.position.x = data.x + (headPos.x - data.x) * ease;
+      dummy.position.y = data.y + (headPos.y - data.y) * ease;
+      dummy.position.z = 0.5;
+      
+      dummy.scale.setScalar((1 - t) * 0.5);
+      dummy.updateMatrix();
+      
+      meshRef.current!.setMatrixAt(i, dummy.matrix);
+      colorObj.set(data.color);
+      meshRef.current!.setColorAt(i, colorObj);
+      i++;
+    });
+
+    meshRef.current.count = i;
+    meshRef.current.instanceMatrix.needsUpdate = true;
+    if (meshRef.current.instanceColor) meshRef.current.instanceColor.needsUpdate = true;
+  });
+
+  return (
+    <instancedMesh ref={meshRef} args={[null as any, null as any, 100]} frustumCulled={false}>
+      <sphereGeometry args={[1, 12, 12]} />
+      <meshStandardMaterial 
+        transparent 
+        opacity={0.8} 
+        metalness={0.5} 
+        roughness={0.2} 
+        toneMapped={false}
+        onBeforeCompile={(shader) => {
+          shader.fragmentShader = shader.fragmentShader.replace(
+            '#include <emissivemap_fragment>',
+            `
+            #include <emissivemap_fragment>
+            totalEmissiveRadiance += diffuseColor.rgb * 4.0;
+            `
+          );
+        }}
+      />
+    </instancedMesh>
   );
 }
 
@@ -174,11 +488,13 @@ function Orbs() {
 }
 
 export function GameScene() {
-  const { gameState, playerId, sendPlayerState, sendCollectOrb } = useGameStore();
+  const { gameState, playerId, sendPlayerState, sendCollectOrb, sendCollectPowerUp, sendFireMissile, sendActivatePortal, socket } = useGameStore();
   const { camera } = useThree();
-  const inputs = useRef({ left: false, right: false, boost: false });
+  const inputs = useRef({ left: false, right: false, boost: false, fire: false, portal: false });
   const lightRef = useRef<THREE.DirectionalLight>(null);
   const [lightTarget] = useState(() => new THREE.Object3D());
+  const [localHeadPos, setLocalHeadPos] = useState<{x: number, y: number} | null>(null);
+  const lastTeleportTime = useRef<number>(0);
 
   const localPlayerRef = useRef<{
     active: boolean;
@@ -201,16 +517,26 @@ export function GameScene() {
       if ((e.key === 'a' || e.key === 'A' || e.key === 'ArrowLeft') && !inputs.current.left) { inputs.current.left = true; }
       if ((e.key === 'd' || e.key === 'D' || e.key === 'ArrowRight') && !inputs.current.right) { inputs.current.right = true; }
       if ((e.key === ' ' || e.key === 'w' || e.key === 'W' || e.key === 'ArrowUp') && !inputs.current.boost) { inputs.current.boost = true; }
+      if ((e.key === 'r' || e.key === 'R') && !inputs.current.fire) { 
+        inputs.current.fire = true;
+        sendFireMissile();
+      }
+      if ((e.key === 't' || e.key === 'T') && !inputs.current.portal) { 
+        inputs.current.portal = true;
+        sendActivatePortal();
+      }
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
       if ((e.key === 'a' || e.key === 'A' || e.key === 'ArrowLeft') && inputs.current.left) { inputs.current.left = false; }
       if ((e.key === 'd' || e.key === 'D' || e.key === 'ArrowRight') && inputs.current.right) { inputs.current.right = false; }
       if ((e.key === ' ' || e.key === 'w' || e.key === 'W' || e.key === 'ArrowUp') && inputs.current.boost) { inputs.current.boost = false; }
+      if ((e.key === 'r' || e.key === 'R') && inputs.current.fire) { inputs.current.fire = false; }
+      if ((e.key === 't' || e.key === 'T') && inputs.current.portal) { inputs.current.portal = false; }
     };
 
     const handleBlur = () => {
-      inputs.current = { left: false, right: false, boost: false };
+      inputs.current = { left: false, right: false, boost: false, fire: false, portal: false };
     };
 
     window.addEventListener('keydown', handleKeyDown);
@@ -222,12 +548,36 @@ export function GameScene() {
       window.removeEventListener('keyup', handleKeyUp);
       window.removeEventListener('blur', handleBlur);
     };
-  }, []);
+  }, [sendFireMissile, sendActivatePortal]);
+
+  useEffect(() => {
+    if (!socket) return;
+    const handleBlackHoleHit = () => {
+      const player = localPlayerRef.current;
+      if (player.active) {
+        const newLength = Math.max(INITIAL_LENGTH, Math.floor(player.segments.length * 0.5));
+        player.segments = player.segments.slice(0, newLength);
+        player.score = Math.floor(player.score * 0.5);
+      }
+    };
+    socket.on('black_hole_hit', handleBlackHoleHit);
+    return () => {
+      socket.off('black_hole_hit', handleBlackHoleHit);
+    };
+  }, [socket]);
 
   useFrame((state, delta) => {
     const gs = globalGameState.current;
     if (!gs || !playerId) return;
     
+    // Merge mobile inputs from store
+    const mobileInputs = useGameStore.getState().inputs;
+    const finalInputs = {
+      left: inputs.current.left || mobileInputs.left,
+      right: inputs.current.right || mobileInputs.right,
+      boost: inputs.current.boost || mobileInputs.boost,
+    };
+
     const serverPlayer = gs.players[playerId];
     if (serverPlayer && serverPlayer.state === 'alive') {
       
@@ -241,20 +591,66 @@ export function GameScene() {
 
       if (!localPlayerRef.current.active) return;
 
+      // Sync from server if score dropped significantly (e.g. black hole hit)
+      if (serverPlayer.score < localPlayerRef.current.score * 0.6) {
+        localPlayerRef.current.segments = [...serverPlayer.segments];
+        localPlayerRef.current.score = serverPlayer.score;
+      }
+
       // Local movement logic
-      if (inputs.current.left) localPlayerRef.current.currentAngle += TURN_SPEED * delta;
-      if (inputs.current.right) localPlayerRef.current.currentAngle -= TURN_SPEED * delta;
+      if (finalInputs.left) localPlayerRef.current.currentAngle += TURN_SPEED * delta;
+      if (finalInputs.right) localPlayerRef.current.currentAngle -= TURN_SPEED * delta;
       
       // Boost check: must have at least MIN_BOOST_LENGTH
-      localPlayerRef.current.isBoosting = inputs.current.boost && localPlayerRef.current.score > MIN_BOOST_LENGTH;
+      localPlayerRef.current.isBoosting = finalInputs.boost && localPlayerRef.current.score > MIN_BOOST_LENGTH;
       
-      // Speed scaling: bigger = slower
+      // Speed scaling: bigger = slower, power-ups = faster
       const lengthScale = 10 / (10 + Math.max(0, localPlayerRef.current.score - INITIAL_LENGTH) * 0.1);
-      const speed = (localPlayerRef.current.isBoosting ? BOOST_SPEED : BASE_SPEED) * lengthScale;
+      const speed = (localPlayerRef.current.isBoosting ? BOOST_SPEED : BASE_SPEED) * lengthScale * serverPlayer.speedMultiplier;
       
       const head = { ...localPlayerRef.current.segments[0] };
       head.x += Math.cos(localPlayerRef.current.currentAngle) * speed * delta;
       head.y += Math.sin(localPlayerRef.current.currentAngle) * speed * delta;
+
+    // Portal teleportation
+    const now = Date.now();
+    if (now - lastTeleportTime.current > 1000) {
+        for (const portalId in gs.portals) {
+          const p = gs.portals[portalId];
+          const d1 = Math.sqrt(Math.pow(head.x - p.x1, 2) + Math.pow(head.y - p.y1, 2));
+          const d2 = Math.sqrt(Math.pow(head.x - p.x2, 2) + Math.pow(head.y - p.y2, 2));
+          
+          if (d1 < 1.5) {
+            head.x = p.x2;
+            head.y = p.y2;
+            lastTeleportTime.current = now;
+            break;
+          } else if (d2 < 1.5) {
+            head.x = p.x1;
+            head.y = p.y1;
+            lastTeleportTime.current = now;
+            break;
+          }
+        }
+      }
+
+      // Update local head pos for animation
+      setLocalHeadPos({ x: head.x, y: head.y });
+
+      // Black hole pull effect
+      for (const id in gs.blackHoles) {
+        const bh = gs.blackHoles[id];
+        const dx = bh.x - head.x;
+        const dy = bh.y - head.y;
+        const distSq = dx * dx + dy * dy;
+        const pullRadius = bh.radius * 3;
+        if (distSq < pullRadius * pullRadius) {
+          const dist = Math.sqrt(distSq);
+          const force = (1 - dist / pullRadius) * 10;
+          head.x += (dx / dist) * force * delta;
+          head.y += (dy / dist) * force * delta;
+        }
+      }
 
       // Boundary check
       const boundary = WORLD_SIZE / 2;
@@ -267,7 +663,7 @@ export function GameScene() {
 
       if (localPlayerRef.current.isBoosting) {
         // Lose length during boost
-        localPlayerRef.current.score -= 3 * delta; // Increased loss rate slightly for better feel
+        localPlayerRef.current.score -= 3 * delta; 
         if (localPlayerRef.current.score <= MIN_BOOST_LENGTH) {
           localPlayerRef.current.isBoosting = false;
           localPlayerRef.current.score = MIN_BOOST_LENGTH;
@@ -287,34 +683,63 @@ export function GameScene() {
         const dy = head.y - orb.y;
         if (dx * dx + dy * dy < 4) {
           localPlayerRef.current.score += orb.value;
-          localCollectedOrbs.add(orbId);
+          localCollectedOrbs.set(orbId, { 
+            x: orb.x, 
+            y: orb.y, 
+            color: orb.color, 
+            time: Date.now() 
+          });
           delete gs.orbs[orbId]; // predict locally
           sendCollectOrb(orbId);
         }
       }
 
+      // Check power-up collisions
+      for (const puId in gs.powerUps) {
+        const pu = gs.powerUps[puId];
+        const dx = head.x - pu.x;
+        const dy = head.y - pu.y;
+        if (dx * dx + dy * dy < 4) {
+          sendCollectPowerUp(puId);
+          delete gs.powerUps[puId]; // predict locally
+        }
+      }
+
       // Cleanup localCollectedOrbs occasionally
       if (Math.random() < 0.05) {
-        for (const id of localCollectedOrbs) {
-          if (!gs.orbs[id]) localCollectedOrbs.delete(id);
+        const now = Date.now();
+        for (const [id, data] of localCollectedOrbs) {
+          if (now - data.time > 1000 && !gs.orbs[id]) {
+            localCollectedOrbs.delete(id);
+          }
         }
       }
 
       // Check player collisions
       let collided = false;
-      for (const otherId in gs.players) {
-        if (otherId === playerId) continue;
-        const other = gs.players[otherId];
-        if (other.state !== 'alive') continue;
-        for (const seg of other.segments) {
-          const dx = head.x - seg.x;
-          const dy = head.y - seg.y;
-          if (dx * dx + dy * dy < 2.25) {
-            collided = true;
-            break;
+      if (!serverPlayer.isInvincible) {
+        const myScale = (1 + (localPlayerRef.current.score - INITIAL_LENGTH) * 0.02) * (serverPlayer.isShrunk ? 0.5 : 1);
+        const myRadius = 0.8 * myScale;
+
+        for (const otherId in gs.players) {
+          if (otherId === playerId) continue;
+          const other = gs.players[otherId];
+          if (other.state !== 'alive') continue;
+          
+          const otherScale = (1 + (other.score - INITIAL_LENGTH) * 0.02) * (other.isShrunk ? 0.5 : 1);
+          const otherRadius = 0.6 * otherScale; // body segment radius
+
+          for (const seg of other.segments) {
+            const dx = head.x - seg.x;
+            const dy = head.y - seg.y;
+            const minDist = myRadius + otherRadius;
+            if (dx * dx + dy * dy < minDist * minDist) {
+              collided = true;
+              break;
+            }
           }
+          if (collided) break;
         }
-        if (collided) break;
       }
 
       if (collided) {
@@ -336,14 +761,14 @@ export function GameScene() {
       gs.players[playerId].isBoosting = localPlayerRef.current.isBoosting;
 
       // Send state to server at 20Hz
-      const now = Date.now();
       if (now - localPlayerRef.current.lastSendTime > 50) {
         sendPlayerState({
           segments: localPlayerRef.current.segments,
           score: localPlayerRef.current.score,
           currentAngle: localPlayerRef.current.currentAngle,
           isBoosting: localPlayerRef.current.isBoosting,
-          state: 'alive'
+          state: 'alive',
+          speedMultiplier: serverPlayer.speedMultiplier
         });
         localPlayerRef.current.lastSendTime = now;
       }
@@ -409,6 +834,11 @@ export function GameScene() {
       />
 
       <Orbs />
+      <PowerUps />
+      <Missiles />
+      <Portals />
+      <BlackHoles />
+      <CollectedOrbs headPos={localHeadPos} />
 
       {Object.values(gameState.players).map((player) => {
         if (player.state !== 'alive' || player.segments.length === 0) return null;

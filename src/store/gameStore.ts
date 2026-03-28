@@ -19,6 +19,11 @@ interface GameStore {
   joinGame: (name: string, roomId: string) => void;
   sendPlayerState: (data: any) => void;
   sendCollectOrb: (orbId: string) => void;
+  sendCollectPowerUp: (powerUpId: string) => void;
+  sendFireMissile: () => void;
+  sendActivatePortal: () => void;
+  inputs: { left: boolean; right: boolean; boost: boolean };
+  setInputs: (inputs: Partial<{ left: boolean; right: boolean; boost: boolean }>) => void;
 }
 
 export const globalGameState: { current: GameState | null } = { current: null };
@@ -74,4 +79,26 @@ export const useGameStore = create<GameStore>((set, get) => ({
       socket.emit('collect_orb', orbId);
     }
   },
+  sendCollectPowerUp: (powerUpId) => {
+    const { socket } = get();
+    if (socket) {
+      socket.emit('collect_powerup', powerUpId);
+    }
+  },
+  sendFireMissile: () => {
+    const { socket } = get();
+    if (socket) {
+      socket.emit('fire_missile');
+    }
+  },
+  sendActivatePortal: () => {
+    const { socket } = get();
+    if (socket) {
+      socket.emit('activate_portal');
+    }
+  },
+  inputs: { left: false, right: false, boost: false },
+  setInputs: (newInputs) => set((state) => ({ 
+    inputs: { ...state.inputs, ...newInputs } 
+  })),
 }));
